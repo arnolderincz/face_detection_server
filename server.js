@@ -1,8 +1,8 @@
 const express = require('express');
 const bodyParser = require('body-parser');
 const cors = require('cors');
-
-var knex = require('knex')
+const bcrypt = require('bcrypt-nodejs');
+const knex = require('knex');
 
 const db = knex({
     client: 'pg',
@@ -38,29 +38,43 @@ app.get('/', (req, res) => {
 })
 
 app.post('/signin', (req, res) =>{
-    let found = false;
-    database.users.forEach(user => {
-        if((req.body.email === user.email) && (req.body.password === user.password)){
-            found = true;
-            return res.json(user)
-        } 
+    db.select('email', 'hash').from('login')
+    .where({email: req.body.email})
+    .then(data => {  
+        var valid = bcrypt.compareSync(req.body.password, data[0].hash);
+        if(valid){
+            return db.select('*').from('users')
+            .where({email: req.body.email})
+            .then(user => res.json(user[0]))
+            .catch(err => res.status(400).json("unable to get user"))
+        }
     })
-    if(!found){
-        res.json("Can't find user")
-    }
+    .then(err => res.status(400).json("Can't find user"))
 })
 
 app.post('/register', (req, res) =>{
-    const {name, email, pass} = req.body;
-    db('users').returning('*')
-    .insert({
-        name: name,
-        email: email,
-        joined: new Date()
+    const {name, email, password} = req.body;
+    const hash = bcrypt.hashSync(password);
+    db.transaction(trx => {
+        trx.insert({
+            hash: hash,
+            email: email
         })
-        .then(user => res.json(user[0]))
-        .catch(err => res.status(400).json('Unable to join'));
-    
+        .into('login')
+        .returning('email')
+        .then(loginEmail => {
+            return trx('users').returning('*')
+            .insert({
+                name: name,
+                email: loginEmail[0],
+                joined: new Date()
+            })
+            .then(user => res.json(user[0]))
+        })
+        .then(trx.commit)
+        .catch(trx.rollback)
+    })
+    .catch(err => res.status(400).json('Unable to join'));
 })
 
 app.get('/profile/:id', (req, res) =>{
